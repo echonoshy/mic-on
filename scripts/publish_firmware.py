@@ -20,9 +20,22 @@ with tempfile.TemporaryDirectory() as td:
  sig=signature.read_bytes().hex()
 a.out.mkdir(parents=True,exist_ok=True)
 image=a.out/f'{sha}.bin'
-if not image.exists():
- image.write_bytes(b);image.chmod(0o600)
-elif image.read_bytes()!=b:raise SystemExit('Immutable release filename collision')
 manifest={'project':'passport-gpt-live','version':version,'size':len(b),'sha256':sha,'signature':sig}
-tmp=a.out/'latest.json.next';tmp.write_text(json.dumps(manifest,separators=(',',':'))+'\n');tmp.chmod(0o600);os.replace(tmp,a.out/'latest.json')
+with tempfile.TemporaryDirectory(dir=a.out, prefix='.publish-') as staging_dir:
+    staging = Path(staging_dir)
+    if not image.exists():
+        staged_image = staging / image.name
+        staged_image.write_bytes(b)
+        staged_image.chmod(0o600)
+        try:
+            os.link(staged_image, image)
+        except FileExistsError:
+            pass  # A concurrent publication may have installed this digest first.
+    if image.read_bytes() != b:
+        raise SystemExit('Immutable release filename collision')
+
+    staged_manifest = staging / 'latest.json'
+    staged_manifest.write_text(json.dumps(manifest, separators=(',', ':')) + '\n')
+    staged_manifest.chmod(0o600)
+    os.replace(staged_manifest, a.out / 'latest.json')
 print(f'Signed release {version}: {len(b)} bytes, SHA-256 {sha}')
