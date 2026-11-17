@@ -21,7 +21,30 @@ let nonce='', busy=false, scanning=false, rows=[], polling=false, finished=false
 async function request(path,method='GET',body){const r=await fetch(path,{method,body,headers:method==='POST'?{'X-Setup-Nonce':nonce,'Content-Type':'application/x-www-form-urlencoded'}:{},cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error(await r.text());return r}
 function controls(){for(const id of ['network','ssid','password','join','refresh'])$(id).disabled=busy||scanning||!nonce||finished}
 function choice(){const manual=$('network').value==='manual', row=rows[Number($('network').value)];$('manual-row').hidden=$('manual-help').hidden=!manual;$('ssid').required=manual;const secured=manual||!row||row.secured;$('password-row').hidden=!secured;$('password').required=!manual&&secured;if(!secured)$('password').value=''}
-function render(list){rows=list.filter(n=>n.supported).sort((a,b)=>b.rssi-a.rssi);const previous=$('network').selectedOptions[0]?.textContent;$('network').replaceChildren();for(const [i,n] of rows.entries()){const o=document.createElement('option');o.value=String(i);o.textContent=n.ssid+' · '+(n.rssi>=-60?'Strong':n.rssi>=-75?'Medium':'Weak')+' · '+(n.secured?'Password':'Open');$('network').append(o);if(o.textContent===previous)o.selected=true}const manual=document.createElement('option');manual.value='manual';manual.textContent='Enter manually / hidden network';$('network').append(manual);choice()}
+function render(list){
+ const select=$('network'), wasManual=select.value==='manual', previous=rows[select.value];
+ rows=list.filter(n=>n.supported).sort((a,b)=>b.rssi-a.rssi);
+ select.replaceChildren();
+ for(const [i,n] of rows.entries()){
+  const option=document.createElement('option');
+  option.value=String(i);
+  option.textContent=n.ssid+' · '+(n.rssi>=-60?'Strong':n.rssi>=-75?'Medium':'Weak')+' · '+(n.secured?'Password':'Open');
+  select.append(option);
+ }
+ const manual=document.createElement('option');
+ manual.value='manual';manual.textContent='Enter manually / hidden network';select.append(manual);
+ if(wasManual)select.value='manual';
+ else if(previous){
+  const index=rows.findIndex(n=>n.ssid===previous.ssid&&n.secured===previous.secured);
+  if(index>=0)select.value=String(index);
+  else {
+   select.value='manual';
+   $('ssid').value='';
+   $('password').value='';
+  }
+ }
+ choice();
+}
 async function scan(){if(busy||finished)return;scanning=true;controls();note('Scanning nearby networks…');try{await request('/api/scan','POST','');}catch(e){scanning=false;controls();note(e.message+' Tap Refresh to retry.');return}poll()}
 async function poll(){clearTimeout(pollTimer);if(polling||finished)return;polling=true;try{
  const s=await(await request('/api/setup')).json();nonce=s.nonce;latestState=s.state;busy=s.state==='connecting';
@@ -32,7 +55,7 @@ async function poll(){clearTimeout(pollTimer);if(polling||finished)return;pollin
  if(!scanning&&(was||!rows.length)){render(scan.networks);if(s.state==='idle')note(scan.error||(rows.length?'Select your network, then enter its password.':'No supported networks found. Refresh or enter manually.'));}
  controls();
  }catch(e){note('Connection to the device interrupted. Stay on the mic-on hotspot; retrying…');}finally{polling=false;if(!finished)pollTimer=setTimeout(poll,1000)}}
-$('network').onchange=choice;$('refresh').onclick=scan;
+$('network').onchange=()=>{$('password').value='';choice()};$('refresh').onclick=scan;
 $('connect').onsubmit=async e=>{e.preventDefault();if(busy||scanning||finished)return;const ssid=$('network').value==='manual'?$('ssid').value:rows[Number($('network').value)]?.ssid;if(!ssid){note('Select or enter a network.');return}busy=true;controls();$('success').hidden=true;note('Checking connection…');try{await request('/configure','POST',new URLSearchParams({ssid,password:$('password').value}));$('password').value='';}catch(e){busy=false;controls();note(e.message)}};
 $('finish').onclick=async()=>{if(finished)return;try{const r=await request('/finish','POST','');finished=true;note(await r.text());$('finish').disabled=true;controls()}catch(e){note(e.message)}};
 async function saved(){try{const names=await(await request('/networks')).json();for(const name of names){const row=document.createElement('p'),label=document.createElement('span'),b=document.createElement('button');label.textContent=name;b.textContent='FORGET & RESTART';b.onclick=async()=>{if(busy||scanning||finished)return;if(!confirm('Forget '+name+' and restart?'))return;try{const r=await request('/configure','POST',new URLSearchParams({forget:name}));finished=true;note(await r.text());controls()}catch(e){note(e.message)}};row.append(label,b);$('saved').append(row)}}catch(e){$('saved').textContent='Saved networks unavailable.'}}
